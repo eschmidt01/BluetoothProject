@@ -216,7 +216,8 @@ void loop() {
           if (shooterChoice >= 1 && shooterChoice <= 3) {
             Serial.print("Shooter selected barrel: ");
             Serial.println(shooterChoice);
-            if (shooterChoice != dodgerChoice) {
+            // Now the shooter wins (dodger loses) if shooterChoice equals dodgerChoice.
+            if (shooterChoice == dodgerChoice) {
               roundResultSafe = false;
               gameOver = true;
               Serial.println("Result: Dodger HIT!");
@@ -315,7 +316,8 @@ void loop() {
         notificationReceived = false;
         Serial.print("Dodger: Received shooter choice: ");
         Serial.println(receivedShooterChoice);
-        if (receivedShooterChoice != dodgerChoice) {
+        // Now the dodger loses if the received shooter choice equals the dodger's choice.
+        if (receivedShooterChoice == dodgerChoice) {
           roundResultSafe = false;
           gameOver = true;
           Serial.println("Dodger: You were hit!");
