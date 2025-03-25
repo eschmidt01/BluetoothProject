@@ -411,15 +411,15 @@ void drawGameScreen() {
   // Draw barrel selection buttons.
   M5.Display.fillRect(button1X, buttonY, buttonWidth, buttonHeight, DARKGREY);
   M5.Display.drawRect(button1X, buttonY, buttonWidth, buttonHeight, TFT_WHITE);
-  M5.Display.drawCentreString("Barrel 1", button1X + buttonWidth / 2, buttonY + 15, 2);
+  M5.Display.drawCentreString("Barrel1", button1X + buttonWidth / 2, buttonY + 15, 2);
   
   M5.Display.fillRect(button2X, buttonY, buttonWidth, buttonHeight, DARKGREY);
   M5.Display.drawRect(button2X, buttonY, buttonWidth, buttonHeight, TFT_WHITE);
-  M5.Display.drawCentreString("Barrel 2", button2X + buttonWidth / 2, buttonY + 15, 2);
+  M5.Display.drawCentreString("Barrel2", button2X + buttonWidth / 2, buttonY + 15, 2);
   
   M5.Display.fillRect(button3X, buttonY, buttonWidth, buttonHeight, DARKGREY);
   M5.Display.drawRect(button3X, buttonY, buttonWidth, buttonHeight, TFT_WHITE);
-  M5.Display.drawCentreString("Barrel 3", button3X + buttonWidth / 2, buttonY + 15, 2);
+  M5.Display.drawCentreString("Barrel3", button3X + buttonWidth / 2, buttonY + 15, 2);
 }
 
 void drawGameOverScreen() {
