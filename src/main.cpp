@@ -48,7 +48,6 @@ BLEService* pService = nullptr;
 BLECharacteristic* pCharacteristic = nullptr;
 
 // --- BLE Objects for Dodger (Client) ---
-// NOTE: Use BLERemoteCharacteristic for client functions like writeValue() and registerForNotify().
 BLERemoteCharacteristic* pRemoteCharacteristic = nullptr;
 BLEClient* pClient = nullptr;
 
@@ -74,6 +73,11 @@ const int button3X = button2X + buttonWidth + buttonSpacing;  // 140+80+20 = 240
 unsigned long lastTouchTime = 0;
 const unsigned long touchDebounce = 300; // milliseconds
 
+// --- Helper: Check if a point lies in a rectangle ---
+static bool pointInRect(int px, int py, int rx, int ry, int rw, int rh) {
+  return (px >= rx && px <= rx + rw && py >= ry && py <= ry + rh);
+}
+
 // --- Forward Declarations ---
 void drawRoleSelectionScreen();
 void drawGameScreen();
@@ -86,11 +90,11 @@ void setupBLE_Client();
 class MyServerCallbacks : public BLEServerCallbacks {
   void onConnect(BLEServer* pServer) {
     deviceConnected = true;
-    Serial.println("Client connected.");
+    Serial.println("BLE: Client connected.");
   }
   void onDisconnect(BLEServer* pServer) {
     deviceConnected = false;
-    Serial.println("Client disconnected.");
+    Serial.println("BLE: Client disconnected.");
     BLEDevice::startAdvertising();
   }
 };
@@ -99,10 +103,9 @@ class MyCharacteristicCallbacks : public BLECharacteristicCallbacks {
   void onWrite(BLECharacteristic *pCharacteristic) {
     std::string rxValue = pCharacteristic->getValue();
     if (rxValue.length() > 0) {
-      // Parse the dodger's barrel choice (as integer)
       dodgerChoice = atoi(rxValue.c_str());
       dodgerInputReceived = true;
-      Serial.print("Received dodger choice: ");
+      Serial.print("BLE: Received dodger choice: ");
       Serial.println(dodgerChoice);
     }
   }
@@ -114,46 +117,53 @@ static void notifyCallback(BLERemoteCharacteristic* pBLERemoteCharacteristic,
   if (length > 0) {
     receivedShooterChoice = atoi((const char*)pData);
     notificationReceived = true;
-    Serial.print("Notification received: ");
+    Serial.print("BLE: Notification received, shooter choice: ");
     Serial.println(receivedShooterChoice);
   }
 }
 
 void setup() {
-  // Initialize M5 and display
   auto cfg = M5.config();
   M5.begin(cfg);
+  // Set display rotation for proper orientation (adjust as needed).
   M5.Display.setRotation(0);
   M5.Display.fillScreen(BLACK);
   Serial.begin(115200);
-  
-  // Initialize touch (if not already done by M5.update())
+  Serial.println("Setup: Starting system...");
+
+  // Initialize touch.
   M5.Touch.begin(&M5.Display);
-  
-  // Draw role selection screen
+
+  // Draw role selection screen.
   drawRoleSelectionScreen();
-  
-  // Wait for user to select role (touch left = Shooter, right = Dodger)
+  Serial.println("Setup: Role selection screen displayed. Touch left for Shooter, right for Dodger.");
+
+  // Wait for user to select role using touch events.
   while (deviceRole == ROLE_UNDEFINED) {
     M5.update();
-    M5.Touch.update(20);
     if (M5.Touch.getCount() > 0) {
-      auto detail = M5.Touch.getDetail(0);
-      if (detail.wasClicked()) {
-        if (millis() - lastTouchTime < touchDebounce) continue;
-        lastTouchTime = millis();
-        if (detail.x < screenWidth / 2 &&
-            detail.y > roleButtonY && detail.y < roleButtonY + roleButtonHeight) {
-          deviceRole = ROLE_SHOOTER;
-        } else if (detail.x >= screenWidth / 2 &&
-                   detail.y > roleButtonY && detail.y < roleButtonY + roleButtonHeight) {
-          deviceRole = ROLE_DODGER;
-        }
+      if (millis() - lastTouchTime < touchDebounce) {
+        continue;  // Allowed here because we're in a while loop.
+      }
+      lastTouchTime = millis();
+      auto pos = M5.Touch.getDetail(0);  // Get first touch detail
+      int tx = pos.x;
+      int ty = pos.y;
+      Serial.print("Role selection touch: x=");
+      Serial.print(tx);
+      Serial.print(", y=");
+      Serial.println(ty);
+      if (pointInRect(tx, ty, 0, roleButtonY, roleButtonWidth, roleButtonHeight)) {
+        deviceRole = ROLE_SHOOTER;
+        Serial.println("Role selected: SHOOTER");
+      } else if (pointInRect(tx, ty, roleButtonWidth, roleButtonY, roleButtonWidth, roleButtonHeight)) {
+        deviceRole = ROLE_DODGER;
+        Serial.println("Role selected: DODGER");
       }
     }
   }
   
-  // Clear screen and show selected role
+  // Clear screen and show selected role.
   M5.Display.fillScreen(BLACK);
   M5.Display.setTextSize(2);
   if (deviceRole == ROLE_SHOOTER) {
@@ -168,59 +178,61 @@ void setup() {
   
   delay(1000);
   resetGame();
+  Serial.println("Setup complete. Entering main loop.");
 }
 
 void loop() {
   M5.update();
-  M5.Touch.update(20);
   
   // --- Shooter Mode Logic ---
   if (deviceRole == ROLE_SHOOTER) {
     if (shooterState == SHOOTER_WAIT_DODGER) {
-      // Waiting for dodger's barrel selection via BLE
-      drawGameScreen(); // shows "Waiting for dodger..."
+      // Waiting for dodger's barrel selection via BLE.
+      drawGameScreen(); // displays "Waiting for dodger..."
       if (dodgerInputReceived) {
         shooterState = SHOOTER_WAIT_INPUT;
-        dodgerInputReceived = false; // reset flag for next round
-        Serial.println("Dodger input received. Waiting for shooter input.");
+        dodgerInputReceived = false;
+        Serial.println("Shooter: Dodger input received; now waiting for shooter input.");
       }
     }
     else if (shooterState == SHOOTER_WAIT_INPUT) {
-      // Prompt shooter to select a barrel to shoot
-      drawGameScreen(); // shows "Select barrel to shoot"
+      drawGameScreen(); // displays "Select barrel to shoot"
       if (M5.Touch.getCount() > 0) {
-        auto detail = M5.Touch.getDetail(0);
-        if (detail.wasClicked()) {
-          if (millis() - lastTouchTime < touchDebounce) { return; }
+        if (millis() - lastTouchTime >= touchDebounce) {
           lastTouchTime = millis();
-          if (detail.x >= button1X && detail.x <= button1X + buttonWidth &&
-              detail.y >= buttonY && detail.y <= buttonY + buttonHeight) {
+          auto pos = M5.Touch.getDetail(0);
+          int tx = pos.x, ty = pos.y;
+          Serial.print("Shooter button touch: x=");
+          Serial.print(tx);
+          Serial.print(", y=");
+          Serial.println(ty);
+          if (pointInRect(tx, ty, button1X, buttonY, buttonWidth, buttonHeight)) {
             shooterChoice = 1;
-          } else if (detail.x >= button2X && detail.x <= button2X + buttonWidth &&
-                     detail.y >= buttonY && detail.y <= buttonY + buttonHeight) {
+          } else if (pointInRect(tx, ty, button2X, buttonY, buttonWidth, buttonHeight)) {
             shooterChoice = 2;
-          } else if (detail.x >= button3X && detail.x <= button3X + buttonWidth &&
-                     detail.y >= buttonY && detail.y <= buttonY + buttonHeight) {
+          } else if (pointInRect(tx, ty, button3X, buttonY, buttonWidth, buttonHeight)) {
             shooterChoice = 3;
           }
           if (shooterChoice >= 1 && shooterChoice <= 3) {
             Serial.print("Shooter selected barrel: ");
             Serial.println(shooterChoice);
-            // Compare shooter and dodger choices:
             if (shooterChoice != dodgerChoice) {
               roundResultSafe = false;
               gameOver = true;
+              Serial.println("Result: Dodger HIT!");
             } else {
               roundResultSafe = true;
+              Serial.println("Result: Round Safe.");
             }
-            // Send shooter’s selection via BLE notification
             if (deviceConnected) {
               char buf[4];
               sprintf(buf, "%d", shooterChoice);
               pCharacteristic->setValue(buf);
               pCharacteristic->notify();
-              Serial.print("Notified dodger with shooter choice: ");
+              Serial.print("BLE: Notified dodger with shooter choice: ");
               Serial.println(shooterChoice);
+            } else {
+              Serial.println("BLE Warning: No device connected!");
             }
             shooterState = SHOOTER_SHOW_RESULT;
           }
@@ -228,27 +240,31 @@ void loop() {
       }
     }
     else if (shooterState == SHOOTER_SHOW_RESULT) {
-      // Display the result of the round briefly
       drawGameScreen();
       delay(1500);
       if (gameOver || (roundNumber >= MAX_ROUNDS && roundResultSafe)) {
         shooterState = SHOOTER_GAME_OVER;
+        Serial.println("Shooter: Game over.");
       } else {
         roundNumber++;
         shooterState = SHOOTER_WAIT_DODGER;
+        Serial.print("Shooter: Advancing to round ");
+        Serial.println(roundNumber);
       }
     }
     else if (shooterState == SHOOTER_GAME_OVER) {
-      // Show final result and restart option
       drawGameOverScreen();
       if (M5.Touch.getCount() > 0) {
-        auto detail = M5.Touch.getDetail(0);
-        if (detail.wasClicked()) {
-          if (millis() - lastTouchTime < touchDebounce) { return; }
+        if (millis() - lastTouchTime >= touchDebounce) {
           lastTouchTime = millis();
-          // Check if the restart button (centered) is tapped
-          if (detail.x > screenWidth / 2 - 60 && detail.x < screenWidth / 2 + 60 &&
-              detail.y > 120 && detail.y < 160) {
+          auto pos = M5.Touch.getDetail(0);
+          int tx = pos.x, ty = pos.y;
+          Serial.print("Shooter restart touch: x=");
+          Serial.print(tx);
+          Serial.print(", y=");
+          Serial.println(ty);
+          if (pointInRect(tx, ty, screenWidth / 2 - 60, 120, 120, 40)) {
+            Serial.println("Shooter: Restart pressed.");
             resetGame();
             shooterState = SHOOTER_WAIT_DODGER;
           }
@@ -256,37 +272,37 @@ void loop() {
       }
     }
   }
-  
   // --- Dodger Mode Logic ---
   else if (deviceRole == ROLE_DODGER) {
     if (dodgerState == DODGER_WAIT_INPUT) {
-      // Prompt dodger to select a hiding barrel
       drawGameScreen();
       if (M5.Touch.getCount() > 0) {
-        auto detail = M5.Touch.getDetail(0);
-        if (detail.wasClicked()) {
-          if (millis() - lastTouchTime < touchDebounce) { return; }
+        if (millis() - lastTouchTime >= touchDebounce) {
           lastTouchTime = millis();
-          if (detail.x >= button1X && detail.x <= button1X + buttonWidth &&
-              detail.y >= buttonY && detail.y <= buttonY + buttonHeight) {
+          auto pos = M5.Touch.getDetail(0);
+          int tx = pos.x, ty = pos.y;
+          Serial.print("Dodger button touch: x=");
+          Serial.print(tx);
+          Serial.print(", y=");
+          Serial.println(ty);
+          if (pointInRect(tx, ty, button1X, buttonY, buttonWidth, buttonHeight)) {
             dodgerChoice = 1;
-          } else if (detail.x >= button2X && detail.x <= button2X + buttonWidth &&
-                     detail.y >= buttonY && detail.y <= buttonY + buttonHeight) {
+          } else if (pointInRect(tx, ty, button2X, buttonY, buttonWidth, buttonHeight)) {
             dodgerChoice = 2;
-          } else if (detail.x >= button3X && detail.x <= button3X + buttonWidth &&
-                     detail.y >= buttonY && detail.y <= buttonY + buttonHeight) {
+          } else if (pointInRect(tx, ty, button3X, buttonY, buttonWidth, buttonHeight)) {
             dodgerChoice = 3;
           }
           if (dodgerChoice >= 1 && dodgerChoice <= 3) {
             Serial.print("Dodger selected barrel: ");
             Serial.println(dodgerChoice);
-            // Send the dodger’s selection via BLE write
             if (pRemoteCharacteristic != nullptr) {
               char buf[4];
               sprintf(buf, "%d", dodgerChoice);
               pRemoteCharacteristic->writeValue(std::string(buf));
-              Serial.print("Sent dodger choice: ");
+              Serial.print("BLE: Sent dodger choice: ");
               Serial.println(dodgerChoice);
+            } else {
+              Serial.println("BLE Warning: Remote characteristic not found!");
             }
             dodgerState = DODGER_WAIT_SHOT;
           }
@@ -294,15 +310,18 @@ void loop() {
       }
     }
     else if (dodgerState == DODGER_WAIT_SHOT) {
-      // Wait for shooter’s notification with his barrel selection
       drawGameScreen();
       if (notificationReceived) {
         notificationReceived = false;
+        Serial.print("Dodger: Received shooter choice: ");
+        Serial.println(receivedShooterChoice);
         if (receivedShooterChoice != dodgerChoice) {
           roundResultSafe = false;
           gameOver = true;
+          Serial.println("Dodger: You were hit!");
         } else {
           roundResultSafe = true;
+          Serial.println("Dodger: Round safe.");
         }
         dodgerState = DODGER_SHOW_RESULT;
       }
@@ -312,20 +331,27 @@ void loop() {
       delay(1500);
       if (gameOver || (roundNumber >= MAX_ROUNDS && roundResultSafe)) {
         dodgerState = DODGER_GAME_OVER;
+        Serial.println("Dodger: Game over.");
       } else {
         roundNumber++;
         dodgerState = DODGER_WAIT_INPUT;
+        Serial.print("Dodger: Advancing to round ");
+        Serial.println(roundNumber);
       }
     }
     else if (dodgerState == DODGER_GAME_OVER) {
       drawGameOverScreen();
       if (M5.Touch.getCount() > 0) {
-        auto detail = M5.Touch.getDetail(0);
-        if (detail.wasClicked()) {
-          if (millis() - lastTouchTime < touchDebounce) { return; }
+        if (millis() - lastTouchTime >= touchDebounce) {
           lastTouchTime = millis();
-          if (detail.x > screenWidth / 2 - 60 && detail.x < screenWidth / 2 + 60 &&
-              detail.y > 120 && detail.y < 160) {
+          auto pos = M5.Touch.getDetail(0);
+          int tx = pos.x, ty = pos.y;
+          Serial.print("Dodger restart touch: x=");
+          Serial.print(tx);
+          Serial.print(", y=");
+          Serial.println(ty);
+          if (pointInRect(tx, ty, screenWidth / 2 - 60, 120, 120, 40)) {
+            Serial.println("Dodger: Restart pressed.");
             resetGame();
             dodgerState = DODGER_WAIT_INPUT;
           }
@@ -336,32 +362,28 @@ void loop() {
 }
 
 // --- UI Drawing Functions ---
-
-// Draws the initial role selection screen with two buttons
 void drawRoleSelectionScreen() {
-  M5.Display.setRotation(1);
+  M5.Display.setRotation(1);  // Landscape mode.
   M5.Display.fillScreen(BLACK);
   M5.Display.setTextSize(2);
-  // Left half: Shooter button
+  // Left half: Shooter button.
   M5.Display.fillRect(0, roleButtonY, roleButtonWidth, roleButtonHeight, BLUE);
-  M5.Display.drawRect(0, roleButtonY, roleButtonWidth, roleButtonHeight, WHITE);
+  M5.Display.drawRect(0, roleButtonY, roleButtonWidth, roleButtonHeight, TFT_WHITE);
   M5.Display.drawCentreString("Shooter", roleButtonWidth / 2, roleButtonY + 25, 2);
-  // Right half: Dodger button
+  // Right half: Dodger button.
   M5.Display.fillRect(roleButtonWidth, roleButtonY, roleButtonWidth, roleButtonHeight, GREEN);
-  M5.Display.drawRect(roleButtonWidth, roleButtonY, roleButtonWidth, roleButtonHeight, WHITE);
+  M5.Display.drawRect(roleButtonWidth, roleButtonY, roleButtonWidth, roleButtonHeight, TFT_WHITE);
   M5.Display.drawCentreString("Dodger", roleButtonWidth + roleButtonWidth / 2, roleButtonY + 25, 2);
+  Serial.println("UI: Role selection screen drawn.");
 }
 
-// Draws the game screen with current round, instructions, and barrel selection buttons
 void drawGameScreen() {
   M5.Display.fillScreen(BLACK);
   M5.Display.setTextSize(2);
   
-  // Display round information at the top
   String roundStr = "Round: " + String(roundNumber) + " / " + String(MAX_ROUNDS);
   M5.Display.drawCentreString(roundStr, screenWidth / 2, 10, 2);
   
-  // Display instructions based on mode and state
   if (deviceRole == ROLE_SHOOTER) {
     if (shooterState == SHOOTER_WAIT_DODGER) {
       M5.Display.drawCentreString("Waiting for dodger...", screenWidth / 2, 50, 2);
@@ -373,7 +395,7 @@ void drawGameScreen() {
       else
         M5.Display.drawCentreString("Dodger Hit!", screenWidth / 2, 50, 2);
     }
-  } else { // Dodger mode
+  } else { // Dodger mode.
     if (dodgerState == DODGER_WAIT_INPUT) {
       M5.Display.drawCentreString("Select barrel to hide", screenWidth / 2, 50, 2);
     } else if (dodgerState == DODGER_WAIT_SHOT) {
@@ -386,22 +408,20 @@ void drawGameScreen() {
     }
   }
   
-  // Draw barrel selection buttons
-  // Barrel 1
+  // Draw barrel selection buttons.
   M5.Display.fillRect(button1X, buttonY, buttonWidth, buttonHeight, DARKGREY);
-  M5.Display.drawRect(button1X, buttonY, buttonWidth, buttonHeight, WHITE);
+  M5.Display.drawRect(button1X, buttonY, buttonWidth, buttonHeight, TFT_WHITE);
   M5.Display.drawCentreString("Barrel 1", button1X + buttonWidth / 2, buttonY + 15, 2);
-  // Barrel 2
+  
   M5.Display.fillRect(button2X, buttonY, buttonWidth, buttonHeight, DARKGREY);
-  M5.Display.drawRect(button2X, buttonY, buttonWidth, buttonHeight, WHITE);
+  M5.Display.drawRect(button2X, buttonY, buttonWidth, buttonHeight, TFT_WHITE);
   M5.Display.drawCentreString("Barrel 2", button2X + buttonWidth / 2, buttonY + 15, 2);
-  // Barrel 3
+  
   M5.Display.fillRect(button3X, buttonY, buttonWidth, buttonHeight, DARKGREY);
-  M5.Display.drawRect(button3X, buttonY, buttonWidth, buttonHeight, WHITE);
+  M5.Display.drawRect(button3X, buttonY, buttonWidth, buttonHeight, TFT_WHITE);
   M5.Display.drawCentreString("Barrel 3", button3X + buttonWidth / 2, buttonY + 15, 2);
 }
 
-// Draws the game over screen with a result message and a restart button
 void drawGameOverScreen() {
   M5.Display.fillScreen(BLACK);
   M5.Display.setTextSize(2);
@@ -413,13 +433,12 @@ void drawGameOverScreen() {
   }
   M5.Display.drawCentreString("Game Over", screenWidth / 2, 50, 2);
   M5.Display.drawCentreString(result, screenWidth / 2, 80, 2);
-  // Draw restart button (centered)
   M5.Display.fillRect(screenWidth / 2 - 60, 120, 120, 40, BLUE);
-  M5.Display.drawRect(screenWidth / 2 - 60, 120, 120, 40, WHITE);
+  M5.Display.drawRect(screenWidth / 2 - 60, 120, 120, 40, TFT_WHITE);
   M5.Display.drawCentreString("Restart", screenWidth / 2, 130, 2);
+  Serial.println("UI: Game over screen drawn.");
 }
 
-// --- Game Reset Function ---
 void resetGame() {
   roundNumber = 1;
   gameOver = false;
@@ -430,11 +449,10 @@ void resetGame() {
   notificationReceived = false;
   receivedShooterChoice = 0;
   M5.Display.fillScreen(BLACK);
+  Serial.println("Game reset.");
 }
 
 // --- BLE Setup Functions ---
-
-// Sets up BLE as a Server (for the Shooter)
 void setupBLE_Server() {
   BLEDevice::init("M5Core2_Shooter");
   pServer = BLEDevice::createServer();
@@ -455,19 +473,20 @@ void setupBLE_Server() {
   pAdvertising->setMinPreferred(0x06);
   pAdvertising->setMinPreferred(0x12);
   BLEDevice::startAdvertising();
-  Serial.println("BLE Server advertising...");
+  Serial.println("BLE Server: Advertising started.");
 }
 
-// Sets up BLE as a Client (for the Dodger)
 void setupBLE_Client() {
   BLEDevice::init("");
   pClient = BLEDevice::createClient();
-  Serial.println("BLE Client created. Scanning for server...");
+  Serial.println("BLE Client: Created. Scanning for server...");
   
   BLEScan* pBLEScan = BLEDevice::getScan();
   BLEAdvertisedDevice* myDevice = nullptr;
   while (true) {
     BLEScanResults foundDevices = pBLEScan->start(5);
+    Serial.print("BLE Client: Found devices: ");
+    Serial.println(foundDevices.getCount());
     for (int i = 0; i < foundDevices.getCount(); i++) {
       BLEAdvertisedDevice device = foundDevices.getDevice(i);
       if (device.haveServiceUUID() && device.isAdvertisingService(BLEUUID(SERVICE_UUID))) {
@@ -475,31 +494,29 @@ void setupBLE_Client() {
         break;
       }
     }
-    if (myDevice != nullptr) {
-      break;
-    }
-    Serial.println("Server not found, rescanning...");
+    if (myDevice != nullptr) break;
+    Serial.println("BLE Client: Server not found, rescanning...");
   }
   
-  Serial.print("Connecting to ");
+  Serial.print("BLE Client: Connecting to ");
   Serial.println(myDevice->getAddress().toString().c_str());
   pClient->connect(myDevice);
-  Serial.println("Connected to server.");
+  Serial.println("BLE Client: Connected to server.");
   
   BLERemoteService* pRemoteService = pClient->getService(BLEUUID(SERVICE_UUID));
   if (pRemoteService == nullptr) {
-    Serial.println("Failed to find service.");
+    Serial.println("BLE Client Error: Failed to find service.");
     return;
   }
   
   pRemoteCharacteristic = pRemoteService->getCharacteristic(BLEUUID(CHARACTERISTIC_UUID));
   if (pRemoteCharacteristic == nullptr) {
-    Serial.println("Failed to find characteristic.");
+    Serial.println("BLE Client Error: Failed to find characteristic.");
     return;
   }
   
   if (pRemoteCharacteristic->canNotify())
     pRemoteCharacteristic->registerForNotify(notifyCallback);
   
-  Serial.println("BLE Client setup complete.");
+  Serial.println("BLE Client: Setup complete.");
 }
