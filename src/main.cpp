@@ -339,6 +339,7 @@ void loop() {
 
 // Draws the initial role selection screen with two buttons
 void drawRoleSelectionScreen() {
+  M5.Display.setRotation(1);
   M5.Display.fillScreen(BLACK);
   M5.Display.setTextSize(2);
   // Left half: Shooter button
